@@ -193,4 +193,42 @@ describe('BedrockAdapter', () => {
     expect(Object.keys(without)).not.toContain('refusalCategory');
     expect(Object.keys(without.raw as object)).not.toContain('stop_details');
   });
+
+  it("stream(): reads a refusal's category from its message_start when no message_delta carries one, as AnthropicAdapter does (we've seen Anthropic's API send one so, not Bedrock's)", async () => {
+    const start = EVENTS[0] as { message: Record<string, unknown> };
+    const refusedAtStart = (delta: Record<string, unknown>) => [
+      { ...start, message: { ...start.message, stop_details: { type: 'refusal', category: 'cyber' } } },
+      { type: 'message_delta', delta: { stop_reason: 'refusal', ...delta }, usage: { output_tokens: 1 } },
+      { type: 'message_stop' },
+    ].map(chunkFrame);
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, body: streamBody(refusedAtStart({})) })));
+    const fromStart = await bedrock().stream(REQUEST, { onChunk: () => {} });
+    expect(fromStart.refusalCategory).toBe('cyber');
+    expect((fromStart.raw as { stop_details?: unknown }).stop_details).toEqual({ type: 'refusal', category: 'cyber' });
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, body: streamBody(refusedAtStart({ stop_details: { type: 'refusal', category: 'zz_other' } })) })));
+    const fromDelta = await bedrock().stream(REQUEST, { onChunk: () => {} });
+    expect(fromDelta.refusalCategory).toBe('zz_other');
+    expect((fromDelta.raw as { stop_details?: unknown }).stop_details).toEqual({ type: 'refusal', category: 'zz_other' });
+  });
+
+  it("stream(): a message_delta whose stop_details is null carries none: message_start's is kept, and with none the raw response has no stop_details", async () => {
+    const start = EVENTS[0] as { message: Record<string, unknown> };
+    const nullDelta = (startDetails?: unknown) => [
+      startDetails === undefined ? start : { ...start, message: { ...start.message, stop_details: startDetails } },
+      { type: 'message_delta', delta: { stop_reason: 'refusal', stop_details: null }, usage: { output_tokens: 1 } },
+      { type: 'message_stop' },
+    ].map(chunkFrame);
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, body: streamBody(nullDelta({ type: 'refusal', category: 'cyber' })) })));
+    const kept = await bedrock().stream(REQUEST, { onChunk: () => {} });
+    expect(kept.refusalCategory).toBe('cyber');
+    expect((kept.raw as { stop_details?: unknown }).stop_details).toEqual({ type: 'refusal', category: 'cyber' });
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, body: streamBody(nullDelta()) })));
+    const none = await bedrock().stream(REQUEST, { onChunk: () => {} });
+    expect(Object.keys(none)).not.toContain('refusalCategory');
+    expect(Object.keys(none.raw as object)).not.toContain('stop_details');
+  });
 });

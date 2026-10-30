@@ -198,6 +198,12 @@ export function readRefusalCategory(
   return typeof category === 'string' && category !== '' ? { refusalCategory: category } : {};
 }
 
+// Anthropic's API has sent a refusal's stop_details only in message_start, with
+// none in its message_delta.
+export function streamedStopDetails(kept: unknown, carried: unknown): unknown {
+  return carried ?? kept;
+}
+
 export function thinkingEnabled(request: ProviderRequest): boolean {
   const extraThinking = (request.extra as { thinking?: { type?: string } } | undefined)?.thinking;
   const thinkingConfig = request.thinking ?? extraThinking;
@@ -698,6 +704,7 @@ export class AnthropicAdapter implements ProviderAdapter {
             messageStartEvent = boundedProviderEvent({ ...event, message: messageWithoutContent });
           }
           inputTransformations = (event.message as { input_transformations?: unknown }).input_transformations;
+          stopDetails = streamedStopDetails(stopDetails, (event.message as { stop_details?: unknown }).stop_details);
           const usage = event.message.usage as unknown as Record<string, unknown>;
           inputTokens = typeof usage.input_tokens === 'number' ? usage.input_tokens : 0;
           inputReported = typeof usage.input_tokens === 'number';
@@ -787,7 +794,7 @@ export class AnthropicAdapter implements ProviderAdapter {
           if (Array.isArray(fallback)) inputTransformations = fallback;
           stopSequence = delta.stop_sequence ?? undefined;
           // stop_details carries refusal metadata (e.g., category: 'reasoning_extraction')
-          stopDetails = delta.stop_details ?? undefined;
+          stopDetails = streamedStopDetails(stopDetails, delta.stop_details);
           const deltaUsage = event.usage as unknown as {
             output_tokens: number;
             cache_creation_input_tokens?: number | null;

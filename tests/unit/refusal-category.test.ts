@@ -75,6 +75,22 @@ function providerRequest(): ProviderRequest {
 
 const REFUSED_CYBER = { stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber' } };
 
+const REASONING = { type: 'refusal', category: 'reasoning_extraction', explanation: 'zz explanation' };
+
+function refusedAtStart(startDetails: unknown, delta: Record<string, unknown> = { stop_reason: 'refusal', stop_sequence: null }) {
+  return [
+    {
+      type: 'message_start',
+      message: {
+        id: 'msg_zz', type: 'message', role: 'assistant', model: MODEL, content: [],
+        stop_reason: null, stop_sequence: null, stop_details: startDetails, usage: { input_tokens: 10, output_tokens: 1 },
+      },
+    },
+    { type: 'message_delta', delta, usage: { output_tokens: 0 } },
+    { type: 'message_stop' },
+  ];
+}
+
 describe('refusal category: streamYielding re-issue through the real AnthropicAdapter', () => {
   it("announces the refused attempt's category on its retrying event", async () => {
     const { adapter, calls } = scriptedStreams([round(REFUSED_CYBER), round({ stop_reason: 'end_turn' })]);
@@ -105,6 +121,55 @@ describe('refusal category: AnthropicAdapter.stream()', () => {
 
     expect(response.refusalCategory).toBe(expected);
     expect('refusalCategory' in response).toBe(expected !== undefined);
+  });
+});
+
+describe('refusal category: AnthropicAdapter.stream() with stop_details in message_start', () => {
+  it("reads a refusal's stop_details from message_start when its message_delta carries none", async () => {
+    const { adapter } = scriptedStreams([refusedAtStart(REASONING)]);
+    const response = await adapter.stream(providerRequest(), { onChunk: () => {} });
+
+    expect(response.stopReason).toBe('refusal');
+    expect(response.refusalCategory).toBe('reasoning_extraction');
+    expect((response.raw as { stop_details?: unknown }).stop_details).toEqual(REASONING);
+  });
+
+  it("takes a message_delta's stop_details over message_start's", async () => {
+    const delta = { stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber' } };
+    const { adapter } = scriptedStreams([refusedAtStart(REASONING, delta)]);
+    const response = await adapter.stream(providerRequest(), { onChunk: () => {} });
+
+    expect(response.refusalCategory).toBe('cyber');
+    expect((response.raw as { stop_details?: unknown }).stop_details).toEqual({ type: 'refusal', category: 'cyber' });
+  });
+
+  it("keeps message_start's when the message_delta's stop_details is null", async () => {
+    const { adapter } = scriptedStreams([refusedAtStart(REASONING, { stop_reason: 'refusal', stop_details: null })]);
+    const response = await adapter.stream(providerRequest(), { onChunk: () => {} });
+
+    expect(response.refusalCategory).toBe('reasoning_extraction');
+  });
+
+  it("leaves it where a host reads it, in Membrane's response.raw.response", async () => {
+    const { adapter } = scriptedStreams([refusedAtStart(REASONING)]);
+    const membrane = new Membrane(adapter, { formatter: new NativeFormatter() });
+    const response = await membrane.stream(normalizedRequest());
+
+    expect(response.stopReason).toBe('refusal');
+    expect((response.raw?.response as { stop_details?: { category?: unknown } } | undefined)?.stop_details?.category).toBe('reasoning_extraction');
+  });
+
+  it("announces that category on the refused attempt's retrying event", async () => {
+    const { adapter, calls } = scriptedStreams([refusedAtStart(REASONING), round({ stop_reason: 'end_turn' })]);
+    const membrane = new Membrane(adapter, { formatter: new NativeFormatter() });
+
+    const events: StreamEvent[] = [];
+    for await (const event of membrane.streamYielding(normalizedRequest(), { refusalRetries: 1 })) events.push(event);
+
+    expect(calls()).toBe(2);
+    expect(events.filter((e) => e.type === 'retrying')).toEqual([
+      { type: 'retrying', attempt: 1, maxAttempts: 1, reason: 'refusal', category: 'reasoning_extraction' },
+    ]);
   });
 });
 

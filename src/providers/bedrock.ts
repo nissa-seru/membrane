@@ -31,6 +31,7 @@ import {
   readRefusalCategory,
   sendsBlockBinding,
   sendsDisplayUpdates,
+  streamedStopDetails,
   thinkingEnabled,
 } from './anthropic.js';
 import { anthropicWireMessages, blockBuiltFrom } from '../utils/anthropic-wire-blocks.js';
@@ -104,7 +105,8 @@ interface BedrockMessageResponse {
    * With a refusal, its details, as AWS documents for a non-streamed body
    * (Claude Messages API on Bedrock): `category`, such as 'cyber', and an
    * explanation. AWS's page doesn't show it in a stream's events; the stream's
-   * final message carries it when a message_delta did.
+   * final message carries it when a message_delta, or the stream's
+   * message_start, did.
    */
   stop_details?: unknown;
   usage: {
@@ -724,6 +726,7 @@ export class BedrockAdapter implements ProviderAdapter {
 
               if (eventData.type === 'message_start' && eventData.message) {
                 inputTransformations = eventData.message.input_transformations;
+                stopDetails = streamedStopDetails(stopDetails, eventData.message.stop_details);
                 const startUsage = eventData.message.usage;
                 inputTokens = startUsage?.input_tokens ?? 0;
                 inputReported = typeof startUsage?.input_tokens === 'number';
@@ -808,7 +811,7 @@ export class BedrockAdapter implements ProviderAdapter {
                 if (eventData.delta?.stop_reason) {
                   stopReason = eventData.delta.stop_reason;
                 }
-                if (eventData.delta?.stop_details !== undefined) stopDetails = eventData.delta.stop_details;
+                stopDetails = streamedStopDetails(stopDetails, eventData.delta?.stop_details);
                 if (eventData.delta?.stop_sequence) {
                   stopSequence = eventData.delta.stop_sequence;
                 }

@@ -249,7 +249,13 @@ export interface DynamicHeadersContext {
 }
 
 export interface AnthropicAdapterConfig {
-  /** API key (defaults to ANTHROPIC_API_KEY env var) */
+  /**
+   * API key (defaults to ANTHROPIC_API_KEY env var). If a non-empty string
+   * is given, OAuth/Bearer auth is disabled so requests do not send both auth
+   * schemes. With none of this, `authToken` and `credentials` given, the SDK
+   * reads both environment variables and sends each one that is set, both if
+   * both are.
+   */
   apiKey?: string | null;
 
   /**
@@ -380,6 +386,8 @@ export class AnthropicAdapter implements ProviderAdapter {
       clientOptions.apiKey = null;
     } else {
       clientOptions.apiKey = config.apiKey;
+      // Left undefined, the SDK reads ANTHROPIC_AUTH_TOKEN and sends its bearer beside the key.
+      if (config.apiKey) clientOptions.authToken = null;
     }
 
     this.client = new Anthropic(clientOptions);
